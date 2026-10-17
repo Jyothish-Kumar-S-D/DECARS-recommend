@@ -27,6 +27,7 @@ const SOURCE_LABELS = {
   als_hdfs:       { label: "ALS · HDFS",      color: "var(--green)"  },
   redis_cache:    { label: "Redis Cache",      color: "var(--amber)"  },
   claude_fallback:{ label: "Claude Fallback",  color: "var(--purple)" },
+  none:           { label: "No Model",         color: "var(--red)"    },
 };
 
 export default function Recommendations({ api }) {
@@ -51,6 +52,7 @@ export default function Recommendations({ api }) {
       const data = await res.json();
       setRecs(data.recommendations || []);
       setSource(data.source);
+      setError(data.error ? `Backend: ${data.error}` : null);
     } catch (e) {
       setError("Backend unavailable — is docker-compose running?");
     }
@@ -97,7 +99,7 @@ export default function Recommendations({ api }) {
         <div className="card-title" style={{ justifyContent:"space-between", display:"flex", alignItems:"center" }}>
           <span>🔮 Recommendations</span>
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            {source && <span style={{ fontSize:10, fontFamily:"monospace", color: src.color, border:`1px solid ${src.color}`, borderRadius:20, padding:"2px 10px" }}>SOURCE: {src.label}</span>}
+            {src.label && <span style={{ fontSize:10, fontFamily:"monospace", color: src.color, border:`1px solid ${src.color}`, borderRadius:20, padding:"2px 10px" }}>SOURCE: {src.label}</span>}
             {loading ? <div className="spinner"/> :
               <button onClick={() => fetchRecs(selectedUser, selectedProduct)}
                 style={{ background:"rgba(0,212,255,0.1)", border:"1px solid rgba(0,212,255,0.3)", color:"var(--cyan)", borderRadius:6, padding:"4px 14px", cursor:"pointer", fontSize:12, fontFamily:"monospace" }}>
@@ -114,6 +116,11 @@ export default function Recommendations({ api }) {
           </div>
         ) : (
           <div className="reco-grid">
+            {recs.length === 0 && !error && (
+              <div style={{ color:"var(--muted)", fontSize:13, padding:"12px 0" }}>
+                No recommendations returned for this user yet.
+              </div>
+            )}
             {recs.map((r, i) => (
               <div key={r.id} className="reco-card">
                 <div className="reco-badge">#{i+1}</div>

@@ -22,9 +22,9 @@ export default function HDFSCluster({ hdfsStatus }) {
     used:    info.usedSpace,
   }));
 
-  const totalCapacity  = fsInfo.CapacityTotal   || 0;
-  const totalUsed      = fsInfo.CapacityUsed    || 0;
-  const totalBlocks    = fsInfo.BlocksTotal      || 0;
+  const totalCapacity  = fsInfo.CapacityTotal   ?? 0;
+  const totalUsed      = fsInfo.CapacityUsed    ?? 0;
+  const totalBlocks    = fsInfo.BlocksTotal      ?? 0;
   const liveNodeCount  = fsInfo.NumLiveDataNodes || nodeList.length || "—";
 
   const fmt = (bytes) => {
@@ -48,7 +48,7 @@ export default function HDFSCluster({ hdfsStatus }) {
           { val: liveNodeCount,      lbl: "Live DataNodes",  color: "var(--cyan)"   },
           { val: fmt(totalCapacity), lbl: "HDFS Capacity",   color: "var(--purple)" },
           { val: fmt(totalUsed),     lbl: "Used Storage",    color: "var(--amber)"  },
-          { val: totalBlocks ? totalBlocks.toLocaleString() : "—", lbl: "Total Blocks", color:"var(--green)" },
+          { val: fsInfo.BlocksTotal != null ? totalBlocks.toLocaleString() : "—", lbl: "Total Blocks", color:"var(--green)" },
         ].map(m => (
           <div key={m.lbl} className="metric-card">
             <div className="metric-val" style={{ color: m.color }}>

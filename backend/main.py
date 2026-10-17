@@ -31,6 +31,7 @@ from pyspark.sql import SparkSession
 # ── Config ────────────────────────────────────────────────────────────────────
 HDFS_URL            = os.getenv("HDFS_URL", "hdfs://namenode:9000")
 HDFS_WEBHDFS        = "http://namenode:9870/webhdfs/v1"
+HDFS_JMX            = "http://namenode:9870/jmx"
 KAFKA_BROKERS       = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 REDIS_URL           = os.getenv("REDIS_URL", "redis://redis:6379")
 SPARK_MASTER        = os.getenv("SPARK_MASTER", "spark://spark-master:7077")
@@ -153,14 +154,20 @@ async def hdfs_status():
     async with httpx.AsyncClient(timeout=5) as client:
         try:
             # Overall cluster stats
-            r = await client.get(f"{HDFS_WEBHDFS}/?op=GETCONTENTSUMMARY")
+            r = await client.get(f"{HDFS_WEBHDFS}/?op=GETCONTENTSUMMARY", params={"path": "/"})
             summary = r.json() if r.status_code == 200 else {}
 
-            # Live datanodes from JMX
-            jmx_r = await client.get("http://namenode:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeInfo")
-            jmx = jmx_r.json() if jmx_r.status_code == 200 else {}
+            # Live datanode info (NameNodeInfo) + capacity/blocks (FSNamesystem)
+            beans = []
+            for mbean in (
+                "Hadoop:service=NameNode,name=NameNodeInfo",
+                "Hadoop:service=NameNode,name=FSNamesystem",
+            ):
+                jmx_r = await client.get(HDFS_JMX, params={"qry": mbean})
+                if jmx_r.status_code == 200:
+                    beans.extend(jmx_r.json().get("beans", []))
 
-            return {"status": "ok", "summary": summary, "jmx": jmx}
+            return {"status": "ok", "summary": summary, "jmx": {"beans": beans}}
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 
@@ -169,13 +176,19 @@ async def hdfs_status():
 @app.get("/api/spark/status")
 async def spark_status():
     """Query real Spark Master REST API for job and worker info."""
-    async with httpx.AsyncClient(timeout=5) as client:
+    # /json/ (trailing slash) is the Master REST endpoint; /json issues a 302.
+    async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
         try:
-            apps_r    = await client.get(f"{SPARK_UI}/api/v1/applications")
-            workers_r = await client.get(f"{SPARK_UI}/json")
+            r = await client.get(f"{SPARK_UI}/json/")
+            if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+                return {"status": "error", "detail": f"Spark Master UI returned {r.status_code}"}
+
+            master = r.json()
+            applications = master.get("activeapps", []) + master.get("completedapps", [])
             return {
-                "applications": apps_r.json() if apps_r.status_code == 200 else [],
-                "workers":      workers_r.json() if workers_r.status_code == 200 else {},
+                "status":       "ok",
+                "applications": applications,
+                "workers":      master,
             }
         except Exception as e:
             return {"status": "error", "detail": str(e)}
@@ -252,6 +265,14 @@ Sort by score descending. Return ONLY the JSON array."""
 
         await redis_client.setex(cache_key, RECS_CACHE_TTL, json.dumps(enriched))
         return {"source": "claude_fallback", "recommendations": enriched}
+
+    # ── Nothing to serve ───────────────────────────────────────────────────
+    if als_model is not None:
+        return {
+            "source": "none",
+            "recommendations": [],
+            "error": f"User {user_id} is not in the trained ALS data yet",
+        }
 
     return {"source": "none", "recommendations": [], "error": "No model and no API key configured"}
 

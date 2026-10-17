@@ -58,17 +58,22 @@ export default function ALSEngine({ ticks, sparkStatus, api }) {
           {/* Real worker info */}
           {workers.workers?.length > 0 ? (
             <div style={{ marginBottom:16 }}>
-              {workers.workers.map((w, i) => (
-                <div key={i} className="hdfs-node">
-                  <div className={`node-status ${w.state === "ALIVE" ? "healthy" : "warning"}`} />
-                  <span className="node-name" style={{ fontSize:11 }}>{w.id?.split("-").slice(-1)[0] || `Worker-${i+1}`}</span>
-                  <span className="node-role">{w.cores} cores</span>
-                  <div className="bar-wrap">
-                    <div className="bar-fill ok" style={{ width:`${Math.round((w.coresUsed/w.cores)*100)||0}%` }} />
+              {workers.workers.map((w, i) => {
+                // Spark Master REST (/json/) reports lowercase keys: cores, coresused
+                const used  = w.coresused ?? w.coresUsed ?? 0;
+                const total = w.cores || 0;
+                return (
+                  <div key={i} className="hdfs-node">
+                    <div className={`node-status ${w.state === "ALIVE" ? "healthy" : "warning"}`} />
+                    <span className="node-name" style={{ fontSize:11 }}>{w.id?.split("-").slice(-2).join(":") || `Worker-${i+1}`}</span>
+                    <span className="node-role">{total} cores</span>
+                    <div className="bar-wrap">
+                      <div className="bar-fill ok" style={{ width:`${total ? Math.round((used / total) * 100) : 0}%` }} />
+                    </div>
+                    <span className="node-pct">{used}/{total}</span>
                   </div>
-                  <span className="node-pct">{w.coresUsed}/{w.cores}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div style={{ color:"var(--muted)", fontSize:12, marginBottom:16 }}>

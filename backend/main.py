@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     # Spark session (lightweight — used only for model loading + inference)
     spark = (
         SparkSession.builder
-        .appName("NexusRecommend-API")
+        .appName("DecarsRecommend-API")
         .master(SPARK_MASTER)
         .config("spark.sql.shuffle.partitions", "32")
         .getOrCreate()
@@ -98,7 +98,7 @@ async def lifespan(app: FastAPI):
     spark.stop()
 
 
-app = FastAPI(title="NEXUS·RECOMMEND API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="DECARS·RECOMMEND API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

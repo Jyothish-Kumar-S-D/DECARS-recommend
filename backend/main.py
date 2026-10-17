@@ -40,6 +40,8 @@ ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL_PATH          = f"{HDFS_URL}/models/als_latest"
 RECS_PATH           = f"{HDFS_URL}/data/recommendations"
 RECS_CACHE_TTL      = 60   # seconds
+TRAIN_LOG_DIR       = os.getenv("TRAIN_LOG_DIR", "/tmp/decars_logs")
+TRAIN_SCRIPT        = "/app/spark_jobs/train_als.py"
 
 # Load products catalogue (with fallback)
 try:
@@ -278,22 +280,110 @@ Sort by score descending. Return ONLY the JSON array."""
 
 
 # ── Trigger ALS Training ──────────────────────────────────────────────────────
+# Spark-submit output is teed to a log file so the dashboard can show what the
+# job produced (RMSE, saved paths) instead of discarding it into an unread pipe.
+training: dict = {"proc": None, "pid": None, "started_at": None, "log_path": None}
+
+
+def train_summary(log_text: str) -> dict:
+    """Pull the useful result lines out of the driver log."""
+    import re
+
+    def grab(pattern: str):
+        m = re.search(pattern, log_text)
+        return m.group(1) if m else None
+
+    rmse = grab(r"RMSE = ([\d.]+)")
+    return {
+        "interactions": grab(r"Total interactions: (\d+)"),
+        "rmse":         float(rmse) if rmse else None,
+        "model_path":   grab(r"Model saved → (\S+)"),
+        "recs_path":    grab(r"Recommendations saved → (\S+)"),
+        "no_data":      "No data yet" in log_text,
+    }
+
+
+def read_log(lines: int = 25) -> str:
+    path = training.get("log_path")
+    if not path or not os.path.exists(path):
+        return ""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        return "".join(fh.readlines()[-lines:])
+
+
 @app.post("/api/train")
 async def trigger_training():
     """
     Submits the ALS training job to the real Spark cluster via spark-submit.
-    Returns immediately; training runs asynchronously.
+    Returns immediately; training runs asynchronously — follow it with
+    GET /api/train/status.
     """
+    proc = training.get("proc")
+    if proc is not None and proc.poll() is None:
+        return {
+            "status":     "already_running",
+            "pid":        training["pid"],
+            "started_at": training["started_at"],
+            "message":    "An ALS training job is already running",
+        }
+
+    os.makedirs(TRAIN_LOG_DIR, exist_ok=True)
+    log_path = f"{TRAIN_LOG_DIR}/train_{int(time.time())}.log"
+
     cmd = [
         "spark-submit",
         "--master", SPARK_MASTER,
         "--driver-memory", "2g",
         "--executor-memory", "4g",
         "--executor-cores", "2",
-        "/app/spark_jobs/train_als.py",
+        TRAIN_SCRIPT,
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    return {"status": "submitted", "pid": proc.pid, "command": " ".join(cmd)}
+
+    # Keep a handle on the log so the child can write freely (an undrained PIPE
+    # would block the driver once the 64 KB buffer fills up).
+    try:
+        log_file = open(log_path, "w", encoding="utf-8", buffering=1)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd="/app",
+        )
+    except Exception as e:
+        return {"status": "error", "detail": f"Could not start spark-submit: {e}"}
+
+    training.update({
+        "proc": proc,
+        "pid": proc.pid,
+        "started_at": time.time(),
+        "log_path": log_path,
+        "log_file": log_file,
+    })
+
+    return {
+        "status":  "submitted",
+        "pid":     proc.pid,
+        "command": " ".join(cmd),
+        "log_path": log_path,
+    }
+
+
+@app.get("/api/train/status")
+async def training_status(lines: int = Query(25, ge=1, le=200)):
+    """Progress + result of the latest spark-submit run triggered from the UI."""
+    proc     = training.get("proc")
+    running  = proc is not None and proc.poll() is None
+    log_text = read_log(lines)
+
+    return {
+        "running":    running,
+        "pid":        training.get("pid"),
+        "started_at": training.get("started_at"),
+        "exit_code":  None if running or proc is None else proc.returncode,
+        "log_path":   training.get("log_path"),
+        "summary":    train_summary(read_log(1000)),
+        "log_tail":   log_text,
+    }
 
 
 # ── Kafka topic stats ─────────────────────────────────────────────────────────

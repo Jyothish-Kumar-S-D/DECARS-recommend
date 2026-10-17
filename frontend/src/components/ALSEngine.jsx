@@ -1,9 +1,12 @@
 import { useState } from "react";
 import ALSMatrix     from "./ALSMatrix.jsx";
+import useInterval   from "../hooks/useInterval.js";
 
 export default function ALSEngine({ ticks, sparkStatus, api }) {
   const [training,  setTraining]  = useState(false);
   const [trainMsg,  setTrainMsg]  = useState(null);
+  const [job,       setJob]       = useState(null);   // latest /api/train/status payload
+  const [watching,  setWatching]  = useState(false);  // poll while the job runs
 
   const handleTrain = async () => {
     setTraining(true);
@@ -11,12 +14,33 @@ export default function ALSEngine({ ticks, sparkStatus, api }) {
     try {
       const r    = await fetch(`${api}/api/train`, { method: "POST" });
       const data = await r.json();
-      setTrainMsg(`✅ Job submitted (PID ${data.pid}) — check Spark UI at :8082`);
+
+      if (data.status === "error") {
+        setTrainMsg(`⚠️ ${data.detail}`);
+        setWatching(false);
+      } else if (data.status === "already_running") {
+        setTrainMsg(`⏳ A training job is already running (PID ${data.pid})`);
+        setJob({ running: true, pid: data.pid, log_tail: "" });
+        setWatching(true);
+      } else {
+        setTrainMsg(`✅ Job submitted (PID ${data.pid}) — live log below`);
+        setJob({ running: true, pid: data.pid, log_tail: "", submitted: true });
+        setWatching(true);
+      }
     } catch {
       setTrainMsg("⚠️ Could not reach backend. Is docker-compose running?");
     }
     setTraining(false);
   };
+
+  // Poll the training job while it is running (stops when it finishes)
+  useInterval(async () => {
+    try {
+      const s = await fetch(`${api}/api/train/status?lines=40`).then(r => r.json());
+      setJob(prev => ({ ...prev, ...s }));
+      if (!s.running) setWatching(false);
+    } catch { /* backend restarting — keep the last known state */ }
+  }, watching ? 4000 : null);
 
   // Parse real Spark apps from REST API
   const apps    = sparkStatus?.applications || [];
@@ -30,6 +54,16 @@ export default function ALSEngine({ ticks, sparkStatus, api }) {
     { name: "Prediction Inference",        icon: "🔮", s: "queued"  },
     { name: "Result Caching (Redis)",      icon: "⚡", s: "queued"  },
   ];
+
+  const jobState = (() => {
+    if (!job) return null;
+    if (job.running)               return { text: `⏳ Training on Spark cluster… (PID ${job.pid})`, color: "var(--amber)" };
+    if (job.exit_code === 0)       return { text: "✅ Training finished (exit 0)",                  color: "var(--green)" };
+    if (job.exit_code != null)     return { text: `⚠️ Training failed (exit ${job.exit_code})`,     color: "var(--red)"   };
+    return { text: "Waiting for the driver…", color: "var(--muted)" };
+  })();
+
+  const summary = job?.summary || {};
 
   return (
     <div className="main">
@@ -98,6 +132,38 @@ export default function ALSEngine({ ticks, sparkStatus, api }) {
             </button>
             {trainMsg && <div style={{ marginTop:8, fontSize:11, color:"var(--green)" }}>{trainMsg}</div>}
           </div>
+
+          {/* Training result: state, RMSE, HDFS outputs, driver log tail */}
+          {job && (
+            <div style={{ marginTop:12, border:"1px solid rgba(0,212,255,0.18)", borderRadius:8, padding:"10px 12px", background:"rgba(0,212,255,0.04)" }}>
+              <div style={{ fontSize:12, fontFamily:"monospace", color: jobState?.color }}>{jobState?.text}</div>
+
+              {(summary.interactions || summary.rmse != null || summary.model_path || summary.no_data) && (
+                <div style={{ marginTop:8, fontSize:11, color:"var(--muted)", lineHeight:1.8 }}>
+                  {summary.no_data && (
+                    <div style={{ color:"var(--amber)" }}>
+                      ⚠️ No clickstream Parquet in HDFS yet — start the Kafka→HDFS streaming job first.
+                    </div>
+                  )}
+                  {summary.interactions && <div>Interactions: <strong style={{ color:"var(--text)" }}>{summary.interactions}</strong></div>}
+                  {summary.rmse != null && <div>RMSE: <strong style={{ color:"var(--amber)" }}>{summary.rmse}</strong></div>}
+                  {summary.model_path && <div>Model: <span style={{ color:"var(--cyan)", fontFamily:"monospace" }}>{summary.model_path}</span></div>}
+                  {summary.recs_path && <div>Recommendations: <span style={{ color:"var(--cyan)", fontFamily:"monospace" }}>{summary.recs_path}</span></div>}
+                  {!job.running && summary.rmse != null && (
+                    <div style={{ color:"var(--green)" }}>
+                      Open the Recommendations tab (cache refreshes within 60 s) to see the new results.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {job.log_tail && (
+                <pre style={{ marginTop:10, marginBottom:0, maxHeight:170, overflow:"auto", fontSize:10, lineHeight:1.5, color:"var(--muted)", background:"rgba(0,0,0,0.35)", border:"1px solid rgba(0,212,255,0.12)", borderRadius:6, padding:"8px 10px", whiteSpace:"pre-wrap" }}>
+                  {job.log_tail.trim()}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -74,10 +74,10 @@
 
 ### 1. Clone & configure
 ```bash
-git clone https://github.com/Jyothish-Kumar-S-D/Big-Data-Project-.git
-cd nexus-recommend
+git clone https://github.com/Jyothish-Kumar-S-D/DECARS-recommend.git
+cd DECARS-recommend
 cp .env.example .env
-# Edit .env → add ANTHROPIC_API_KEY
+# Edit .env → add ANTHROPIC_API_KEY (optional)
 ```
 
 ### 2. Start the full stack
@@ -91,8 +91,14 @@ First launch downloads ~3 GB of images. Takes 3–5 minutes.
 chmod +x scripts/init.sh
 ./scripts/init.sh
 ```
-
+in  case of error regarding CLRF and LF 
+```bash
+chmod +x scripts/init.sh
+sed -i 's/\r$//' scripts/init.sh
+./scripts/init.sh
+```
 ### 4. Open the services
+
 
 | Service | URL |
 |---------|-----|
@@ -114,7 +120,7 @@ Training takes ~1–3 minutes. Watch progress at http://localhost:8082.
 ## Project Structure
 
 ```
-nexus-recommend/
+DECARS-recommend/
 ├── docker-compose.yml          ← Full cluster definition
 ├── .env.example                ← Copy to .env
 ├── scripts/
